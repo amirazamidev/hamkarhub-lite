@@ -23,12 +23,12 @@ else
 fi
 
 # ۲. به‌روزرسانی مخازن و نصب بسته‌های پیش‌نیاز
-echo "📦 ۱/۵ به‌روزرسانی مخازن لینوکس و نصب پیش‌نیازها..."
+echo "📦 ۱/۶ به‌روزرسانی مخازن لینوکس و نصب پیش‌نیازها..."
 $SUDO apt-get update -y
-$SUDO apt-get install -y curl ufw unzip git build-essential
+$SUDO apt-get install -y curl ufw unzip git build-essential nginx openssl certbot python3-certbot-nginx
 
 # ۳. بررسی و نصب Node.js نسخه ۲۰ LTS
-echo "📦 ۲/۵ بررسی و نصب Node.js نسخه 20 LTS..."
+echo "📦 ۲/۶ بررسی و نصب Node.js نسخه 20 LTS..."
 NEED_NODE=0
 if ! command -v node &> /dev/null; then
     NEED_NODE=1
@@ -63,20 +63,16 @@ SERVICE_USER="${SUDO_USER:-$(whoami)}"
 echo "⚙️ تنظیم مالکیت دایرکتوری برای کاربر $SERVICE_USER..."
 $SUDO chown -R "$SERVICE_USER:$SERVICE_USER" "$CURRENT_DIR" || true
 
-echo "📦 ۳/۵ نصب وابستگی‌های پروژه با رفع تداخل esbuild (--legacy-peer-deps)..."
+echo "📦 ۳/۶ نصب وابستگی‌های پروژه با رفع تداخل esbuild (--legacy-peer-deps)..."
 npm install --legacy-peer-deps
 
 # ۵. کامپایل و ساخت بیلد فرانت‌اند با بهینه‌سازی حافظه و ۴ هسته پردازنده
-echo "🔨 ۴/۵ ساخت بیلد نهایی پروژه (npm run build)..."
+echo "🔨 ۴/۶ ساخت بیلد نهایی پروژه (npm run build)..."
 export UV_THREADPOOL_SIZE=4
 NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
-# ۶. باز کردن پورت ۳۰۰۰ در فایروال اوبونتو (UFW)
-echo "🛡️ باز کردن پورت 3000 در فایروال UFW..."
-$SUDO ufw allow 3000/tcp || true
-
-# ۷. ایجاد و راه‌اندازی سرویس دائمی systemd در پس‌زمینه
-echo "⚙️ ۵/۵ پیکربندی سرویس دائمی در systemd..."
+# ۶. ایجاد و راه‌اندازی سرویس دائمی systemd در پس‌زمینه
+echo "⚙️ ۵/۶ پیکربندی سرویس دائمی در systemd..."
 NODE_EXEC=$(which node)
 
 $SUDO bash -c "cat <<EOF > /etc/systemd/system/hamkarhub.service
@@ -104,16 +100,76 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable hamkarhub.service
 $SUDO systemctl restart hamkarhub.service
 
+# ۷. پیکربندی Nginx به‌عنوان پروکسی روی پورت‌های ۸۰ و ۴۴۳ و فایروال
+echo "⚙️ ۶/۶ پیکربندی Nginx روی پورت‌های ۸۰ و ۴۴۳..."
+
+$SUDO bash -c "cat <<'EOF' > /etc/nginx/sites-available/hamkarhub
+# HamkarHub reverse proxy (80/443) -> Node app on 127.0.0.1:3000
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size 12m;
+
+    # Server-Sent Events (چت زنده)
+    location /api/chat/stream {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 24h;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_read_timeout 3600s;
+    }
+}
+EOF"
+
+$SUDO rm -f /etc/nginx/sites-enabled/default || true
+$SUDO ln -sf /etc/nginx/sites-available/hamkarhub /etc/nginx/sites-enabled/hamkarhub
+if $SUDO nginx -t; then
+    $SUDO systemctl enable nginx >/dev/null 2>&1 || true
+    $SUDO systemctl restart nginx || true
+else
+    echo "⚠️ پیکربندی Nginx نامعتبر بود؛ لطفاً دستی بررسی کنید."
+fi
+
+$SUDO ufw allow 80/tcp || true
+$SUDO ufw allow 443/tcp || true
+$SUDO ufw allow 3000/tcp || true
+
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 echo ""
 echo "=========================================================="
 echo "🎉 نصب با موفقیت تکمیل شد و پروژه آماده اجرا است!"
 echo "=========================================================="
-echo "🌐 آدرس سامانه در شبکه: http://${SERVER_IP}:3000"
-echo "🔐 پنل مدیریت ادمین:   http://${SERVER_IP}:3000 (رمز پیش‌فرض: admin123)"
+echo "🌐 آدرس سامانه در شبکه: http://${SERVER_IP}"
+echo "🔐 پنل مدیریت ادمین:   http://${SERVER_IP} (رمز پیش‌فرض: admin123)"
+echo "🔒 برای فعال‌سازی SSL (HTTPS روی پورت ۴۴۳): sudo bash setup-ssl.sh"
 echo "📌 مدیریت سرویس در اوبونتو:"
-echo "   - بررسی وضعیت: sudo systemctl status hamkarhub"
+echo "   - بررسی وضعیت: sudo systemctl status hamkarhub nginx"
 echo "   - ری‌استارت:    sudo systemctl restart hamkarhub"
 echo "   - لاگ زنده:    sudo journalctl -u hamkarhub -f"
 echo "=========================================================="

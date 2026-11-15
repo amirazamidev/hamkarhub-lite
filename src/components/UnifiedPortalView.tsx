@@ -18,6 +18,7 @@ import {
   Info,
   Activity,
   Gauge,
+  Server,
   Check,
   Laptop,
   Smartphone,
@@ -390,6 +391,13 @@ export const UnifiedPortalView: React.FC<UnifiedPortalViewProps> = ({
   const [jitterMs, setJitterMs] = useState<number | null>(null);
   const [downloadMbps, setDownloadMbps] = useState<number | null>(null);
   const [speedTestProgress, setSpeedTestProgress] = useState(0);
+  const [speedTestServer, setSpeedTestServer] = useState<{
+    name: string;
+    hostname: string;
+    ip: string;
+    port: number;
+    url: string;
+  } | null>(null);
 
   // Fetch live stats whenever session is connected
   React.useEffect(() => {
@@ -415,6 +423,14 @@ export const UnifiedPortalView: React.FC<UnifiedPortalViewProps> = ({
     setSpeedTestPhase('ping');
     setSpeedTestProgress(20);
     try {
+      // شناسایی سروری که تست از روی آن انجام می‌شود
+      try {
+        const infoRes = await fetch('/api/speedtest/info?t=' + Date.now(), { cache: 'no-store' });
+        if (infoRes.ok) setSpeedTestServer(await infoRes.json());
+      } catch {
+        // بدون اطلاعات سرور ادامه می‌دهیم
+      }
+
       // Phase 1: Ping & Jitter
       const pings: number[] = [];
       for (let i = 0; i < 3; i++) {
@@ -924,6 +940,20 @@ export const UnifiedPortalView: React.FC<UnifiedPortalViewProps> = ({
                       <span className="text-[10px] text-slate-400 font-mono">
                         Gateway: {config.routerIp}
                       </span>
+                    </div>
+
+                    {/* سروری که تست سرعت از روی آن انجام می‌شود */}
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-400 bg-slate-900/70 border border-slate-800 rounded-lg px-2.5 py-1.5">
+                      <Server className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span>سرور تست:</span>
+                      <span className="font-mono text-slate-200">
+                        {speedTestServer
+                          ? `${speedTestServer.name} — ${speedTestServer.ip}:${speedTestServer.port}`
+                          : 'در حال شناسایی...'}
+                      </span>
+                      {speedTestServer && (
+                        <span className="text-slate-500 font-mono truncate">({speedTestServer.hostname})</span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 text-center">

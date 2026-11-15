@@ -130,6 +130,8 @@ export interface HotspotUserAccount {
   comment?: string;
   disabled?: boolean;
   sharedUsers?: number; // Max allowed concurrent devices
+  /** اگر این اکانت یک ووچر (کارت اعتباری اینترنت) باشد */
+  isVoucher?: boolean;
 }
 
 export interface HotspotActiveUser {

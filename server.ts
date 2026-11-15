@@ -4,6 +4,7 @@ process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '4';
 import http from 'http';
 import os from 'os';
 import zlib from 'zlib';
+import crypto from 'crypto';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -20,6 +21,8 @@ const app = express();
 app.disable('x-powered-by');
 app.set('etag', 'strong');
 app.set('json spaces', 0);
+// پشت Nginx قرار داریم؛ برای خواندن آی‌پی و پروتکل واقعی کاربر از هدرهای X-Forwarded-*
+app.set('trust proxy', true);
 
 // Ensure port 3000 in AI Studio preview (avoid collision with NGINX_PORT=8080) while honoring custom PORT in standalone prod
 const rawAppPort = process.env.APP_PORT || process.env.DEFAULT_APP_PORT;
@@ -224,6 +227,8 @@ export interface HotspotUserAccount {
   comment?: string;
   disabled?: boolean;
   sharedUsers?: number;
+  /** اگر این اکانت یک ووچر (کارت اعتباری) باشد */
+  isVoucher?: boolean;
 }
 
 export interface HotspotActiveUser {
@@ -306,7 +311,7 @@ const DEFAULT_DB: DBState = {
     hotspotName: 'Hamkar Hub Wi-Fi',
     loginMethod: 'http-chap',
     serverLocalIp: '192.168.88.254',
-    serverPort: 3000,
+    serverPort: 80,
     trialDurationMinutes: 60,
     dailyVoucherPrefix: 'DAY-',
     walledGardenDomain: 'hub.local',
@@ -1119,6 +1124,30 @@ app.get('/api/speedtest/payload', (req: Request, res: Response) => {
   res.send(chunk);
 });
 
+// مشخصات سروری که تست سرعت از روی آن انجام می‌شود (برای نمایش به کاربر)
+app.get('/api/speedtest/info', (req: Request, res: Response) => {
+  const db = readDb();
+  let localIp = db.config.serverLocalIp || '';
+  if (!localIp) {
+    for (const iface of Object.values(os.networkInterfaces())) {
+      const found = (iface || []).find((a) => a && a.family === 'IPv4' && !a.internal);
+      if (found) {
+        localIp = found.address;
+        break;
+      }
+    }
+  }
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.json({
+    hostname: os.hostname(),
+    name: db.config.hotspotName || 'Hamkar Hub Wi-Fi',
+    ip: localIp,
+    port: db.config.serverPort,
+    url: `${req.protocol}://${req.get('host')}`,
+    platform: `${os.platform()} ${os.arch()}`,
+  });
+});
+
 // Resolve end-user identity directly from their MikroTik hotspot account (auto, by client IP)
 app.get('/api/hotspot/whoami', (req: Request, res: Response) => {
   const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
@@ -1838,6 +1867,90 @@ app.post('/api/mikrotik/users', async (req: Request, res: Response) => {
   saveDb(db);
   broadcast('hotspot_users_updated', db.hotspotUsers);
   res.status(201).json({ success: true, createdOnRouter, user: newUser });
+});
+
+// ایجاد گروهی ووچر (کارت اعتباری/پاس روزانه اینترنت) توسط مدیر
+app.post('/api/mikrotik/vouchers', async (req: Request, res: Response) => {
+  const { count, profile, quotaGb, prefix, comment, durationHours } = req.body || {};
+  const db = readDb();
+
+  const n = Math.min(Math.max(Number(count) || 1, 1), 100);
+  const pfx = String(prefix ?? db.config.dailyVoucherPrefix ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\-_]/g, '');
+  const limitBytesTotal =
+    Number(quotaGb) > 0 ? Math.round(Number(quotaGb) * 1024 * 1024 * 1024) : 0;
+  const usedNames = new Set(db.hotspotUsers.map((u) => u.name.toUpperCase()));
+
+  const vouchers: HotspotUserAccount[] = [];
+  for (let i = 0; i < n; i++) {
+    let code = '';
+    do {
+      const rand = crypto.randomInt(0, 36 ** 6).toString(36).toUpperCase().padStart(6, '0');
+      code = `${pfx}${rand}`;
+    } while (usedNames.has(code));
+    usedNames.add(code);
+
+    const voucher: HotspotUserAccount = {
+      id: `voucher-${Date.now()}-${i}`,
+      name: code,
+      password: '',
+      profile: profile || 'daily-pass-3gb',
+      bytesIn: 0,
+      bytesOut: 0,
+      limitBytesTotal,
+      uptime: '0s',
+      comment: comment || `ووچر${durationHours ? ` ${durationHours} ساعته` : ''}`,
+      disabled: false,
+      isVoucher: true,
+    };
+
+    try {
+      const routerBody: any = {
+        name: voucher.name,
+        password: '',
+        profile: voucher.profile,
+        comment: voucher.comment,
+      };
+      if (voucher.limitBytesTotal > 0) routerBody['limit-bytes-total'] = voucher.limitBytesTotal;
+      const result = await callMikrotikRest(db.config, '/ip/hotspot/user', 'PUT', routerBody);
+      if (result && result['.id']) voucher.id = result['.id'];
+    } catch {
+      // روتر آفلاین؛ فقط در پایگاه داده لوکال ذخیره می‌شود
+    }
+
+    db.hotspotUsers.push(voucher);
+    vouchers.push(voucher);
+  }
+
+  saveDb(db);
+  broadcast('hotspot_users_updated', db.hotspotUsers);
+  res.status(201).json({ success: true, count: vouchers.length, vouchers });
+});
+
+// فعال یا غیرفعال کردن سریع یک اکانت (مثلاً اکانت تست) توسط مدیر
+app.post('/api/mikrotik/users/:id/toggle', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { disabled } = req.body || {};
+  const db = readDb();
+  const user = db.hotspotUsers.find((u) => u.id === id || u.name === id);
+  if (!user) return res.status(404).json({ error: 'کاربر هات‌اسپات یافت نشد' });
+
+  user.disabled = disabled === undefined ? !user.disabled : Boolean(disabled);
+
+  let updatedOnRouter = false;
+  try {
+    await callMikrotikRest(db.config, `/ip/hotspot/user/${encodeURIComponent(user.id)}`, 'PATCH', {
+      disabled: user.disabled ? 'true' : 'false',
+    });
+    updatedOnRouter = true;
+  } catch {
+    // روتر آفلاین؛ وضعیت در پایگاه داده لوکال به‌روزرسانی شد
+  }
+
+  saveDb(db);
+  broadcast('hotspot_users_updated', db.hotspotUsers);
+  res.json({ success: true, updatedOnRouter, user });
 });
 
 // Update / Adjust Quota for Hotspot User

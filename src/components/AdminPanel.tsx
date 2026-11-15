@@ -39,6 +39,8 @@ import {
   Router,
   Cpu,
   Activity,
+  Ticket,
+  Power,
 } from 'lucide-react';
 import { MikrotikIntegrationGuide } from './MikrotikIntegrationGuide';
 import {
@@ -103,6 +105,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newUserQuotaGb, setNewUserQuotaGb] = useState('5');
   const [newUserComment, setNewUserComment] = useState('');
   const [newUserProfile, setNewUserProfile] = useState('default');
+
+  // Voucher Generator Form
+  const [isAddingVoucher, setIsAddingVoucher] = useState(false);
+  const [voucherCount, setVoucherCount] = useState('5');
+  const [voucherProfile, setVoucherProfile] = useState('daily-pass-3gb');
+  const [voucherQuotaGb, setVoucherQuotaGb] = useState('3');
+  const [voucherComment, setVoucherComment] = useState('');
+  const [generatedVouchers, setGeneratedVouchers] = useState<HotspotUserAccount[]>([]);
+  const [isGeneratingVouchers, setIsGeneratingVouchers] = useState(false);
+  const [copiedVoucher, setCopiedVoucher] = useState<string | null>(null);
+  const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
 
   // Full Edit Hotspot User Form
   const [editingUser, setEditingUser] = useState<HotspotUserAccount | null>(null);
@@ -256,6 +269,80 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setNewUsername('');
     setNewUserPass('');
     setNewUserComment('');
+    await loadMikrotikData();
+  };
+
+  // ایجاد گروهی ووچر (کارت اعتباری اینترنت) توسط مدیر
+  const handleCreateVouchers = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsGeneratingVouchers(true);
+    try {
+      const res = await fetch('/api/mikrotik/vouchers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          count: Number(voucherCount) || 1,
+          profile: voucherProfile,
+          quotaGb: Number(voucherQuotaGb) || 0,
+          comment: voucherComment || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGeneratedVouchers(data.vouchers || []);
+        await loadMikrotikData();
+      }
+    } catch (err) {
+      console.error('Error generating vouchers:', err);
+    } finally {
+      setIsGeneratingVouchers(false);
+    }
+  };
+
+  const handleCopyVoucher = (code: string) => {
+    navigator.clipboard?.writeText(code).catch(() => undefined);
+    setCopiedVoucher(code);
+    setTimeout(() => setCopiedVoucher(null), 1500);
+  };
+
+  const handleCopyAllVouchers = () => {
+    const text = generatedVouchers.map((v) => v.name).join('\n');
+    navigator.clipboard?.writeText(text).catch(() => undefined);
+    setCopiedVoucher('__all__');
+    setTimeout(() => setCopiedVoucher(null), 1500);
+  };
+
+  // فعال یا غیرفعال کردن سریع یک اکانت (شامل اکانت تست)
+  const handleToggleUser = async (u: HotspotUserAccount) => {
+    setTogglingUserId(u.id);
+    try {
+      await fetch(`/api/mikrotik/users/${encodeURIComponent(u.id)}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ disabled: !u.disabled }),
+      });
+      await loadMikrotikData();
+    } catch (err) {
+      console.error('Error toggling user:', err);
+    } finally {
+      setTogglingUserId(null);
+    }
+  };
+
+  // ساخت سریع یک اکانت تست برای مدیر
+  const handleCreateTestAccount = async () => {
+    const code = `TEST-${Math.floor(1000 + Math.random() * 9000)}`;
+    await fetch('/api/mikrotik/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: code,
+        password: 'test1234',
+        profile: 'trial',
+        limitBytesTotal: 1024 * 1024 * 1024,
+        comment: 'اکانت تست مدیر',
+      }),
+    });
     await loadMikrotikData();
   };
 
@@ -554,6 +641,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <Plus className="w-3.5 h-3.5" />
                 <span>تعریف کاربر جدید هات‌اسپات</span>
               </button>
+
+              <button
+                onClick={() => {
+                  setGeneratedVouchers([]);
+                  setIsAddingVoucher(true);
+                }}
+                className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+                title="ایجاد گروهی ووچر (کارت اعتباری اینترنت)"
+              >
+                <Ticket className="w-3.5 h-3.5" />
+                <span>ایجاد ووچر</span>
+              </button>
+
+              <button
+                onClick={handleCreateTestAccount}
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 cursor-pointer"
+                title="ساخت سریع یک اکانت تست (قابل فعال/غیرفعال از فهرست)"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>اکانت تست</span>
+              </button>
             </div>
           </div>
 
@@ -657,6 +765,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <td className="py-3 px-3 font-mono font-bold text-white">
                           <div className="flex items-center gap-2">
                             <span>{u.name}</span>
+                            {u.isVoucher && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-sans">
+                                ووچر
+                              </span>
+                            )}
                             {u.disabled && (
                               <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-sans">
                                 مسدود
@@ -737,6 +850,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] cursor-pointer"
                             >
                               تنظیم سقف
+                            </button>
+                            {/* Enable / Disable Account */}
+                            <button
+                              onClick={() => handleToggleUser(u)}
+                              disabled={togglingUserId === u.id}
+                              className={`px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 border cursor-pointer disabled:opacity-50 ${
+                                u.disabled
+                                  ? 'bg-emerald-950 hover:bg-emerald-900/80 text-emerald-300 border-emerald-800'
+                                  : 'bg-rose-950 hover:bg-rose-900/80 text-rose-300 border-rose-800'
+                              }`}
+                              title={u.disabled ? 'فعال‌سازی این اکانت' : 'غیرفعال کردن این اکانت'}
+                            >
+                              <Power className="w-3 h-3" />
+                              <span>{u.disabled ? 'فعال‌سازی' : 'غیرفعال'}</span>
                             </button>
                             {/* Delete User */}
                             <button
@@ -1439,6 +1566,122 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </a>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL: VOUCHER GENERATOR */}
+      {isAddingVoucher && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90">
+          <form
+            onSubmit={handleCreateVouchers}
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+          >
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <Ticket className="w-4 h-4 text-emerald-400" />
+              <span>ایجاد گروهی ووچر (کارت اعتباری اینترنت)</span>
+            </h3>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1 text-right">
+                <label className="text-xs font-medium text-slate-300">تعداد ووچر (۱ تا ۱۰۰):</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={voucherCount}
+                  onChange={(e) => setVoucherCount(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              <div className="space-y-1 text-right">
+                <label className="text-xs font-medium text-slate-300">سقف حجم هر ووچر (گیگابایت):</label>
+                <select
+                  value={voucherQuotaGb}
+                  onChange={(e) => setVoucherQuotaGb(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-400"
+                >
+                  <option value="1">۱ گیگابایت</option>
+                  <option value="2">۲ گیگابایت</option>
+                  <option value="3">۳ گیگابایت</option>
+                  <option value="5">۵ گیگابایت</option>
+                  <option value="10">۱۰ گیگابایت</option>
+                  <option value="0">نامحدود</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1 text-right">
+              <label className="text-xs font-medium text-slate-300">پروفایل (Profile) میکروتیک:</label>
+              <input
+                type="text"
+                value={voucherProfile}
+                onChange={(e) => setVoucherProfile(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-400"
+                placeholder="daily-pass-3gb"
+              />
+            </div>
+
+            <div className="space-y-1 text-right">
+              <label className="text-xs font-medium text-slate-300">توضیحات (اختیاری):</label>
+              <input
+                type="text"
+                value={voucherComment}
+                onChange={(e) => setVoucherComment(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-400"
+                placeholder="مثال: ووچر روزانه پذیرش"
+              />
+            </div>
+
+            {generatedVouchers.length > 0 && (
+              <div className="space-y-2 border-t border-slate-800 pt-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-300">
+                    {generatedVouchers.length} ووچر ساخته شد:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyAllVouchers}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-bold rounded-lg flex items-center gap-1 cursor-pointer"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>{copiedVoucher === '__all__' ? 'کپی شد!' : 'کپی همه'}</span>
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-56 overflow-y-auto">
+                  {generatedVouchers.map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => handleCopyVoucher(v.name)}
+                      className="px-2 py-1.5 bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-lg text-[11px] font-mono text-white flex items-center justify-between gap-1 cursor-pointer"
+                      title="برای کپی کلیک کنید"
+                    >
+                      <span>{v.name}</span>
+                      <Copy className={`w-3 h-3 ${copiedVoucher === v.name ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={isGeneratingVouchers}
+                className="flex-1 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                {isGeneratingVouchers ? 'در حال ساخت ووچرها...' : 'ساخت ووچرها'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddingVoucher(false)}
+                className="py-2 px-4 bg-slate-800 text-slate-300 text-xs rounded-xl cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

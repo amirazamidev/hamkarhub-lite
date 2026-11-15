@@ -24,12 +24,12 @@ echo "=========================================================="
 echo ""
 
 # ۱. نصب پیش‌نیازهای اولیه
-echo "📦 ۱/۵ نصب ابزارهای پایه (git, curl, ufw, build-essential)..."
+echo "📦 ۱/۶ نصب ابزارهای پایه (git, curl, ufw, build-essential, nginx, certbot)..."
 $SUDO apt-get update -y
-$SUDO apt-get install -y git curl ufw unzip build-essential
+$SUDO apt-get install -y git curl ufw unzip build-essential nginx openssl certbot python3-certbot-nginx
 
 # ۲. بررسی و نصب Node.js 20 LTS
-echo "📦 ۲/۵ بررسی و نصب Node.js 20 LTS..."
+echo "📦 ۲/۶ بررسی و نصب Node.js 20 LTS..."
 NEED_NODE=0
 if ! command -v node &> /dev/null; then
     NEED_NODE=1
@@ -72,7 +72,7 @@ else
         REPO_URL="https://github.com/amirazamidev/hamkarhub-lite.git"
     fi
 
-    echo "📁 ۳/۵ آماده‌سازی دایرکتوری در $TARGET_DIR..."
+    echo "📁 ۳/۶ آماده‌سازی دایرکتوری در $TARGET_DIR..."
     if [ -d "$TARGET_DIR/.git" ]; then
         echo "🔄 نسخه قبلی پیدا شد؛ در حال به‌روزرسانی به آخرین نسخه ($REPO_URL)..."
         cd "$TARGET_DIR"
@@ -106,16 +106,15 @@ RUN_USER="${SUDO_USER:-$(whoami)}"
 $SUDO chown -R "$RUN_USER:$RUN_USER" "$TARGET_DIR" || true
 
 # ۴. نصب وابستگی‌های پکیج و ساخت بیلد فرانت‌اند
-echo "📦 ۴/۵ در حال نصب پکیج‌های npm (این فرآیند ممکن است ۱ تا ۲ دقیقه طول بکشد)..."
+echo "📦 ۴/۶ در حال نصب پکیج‌های npm (این فرآیند ممکن است ۱ تا ۲ دقیقه طول بکشد)..."
 npm install --legacy-peer-deps
 
 echo "🔨 در حال ساخت بیلد نهایی پروژه (npm run build)..."
 export UV_THREADPOOL_SIZE=4
 NODE_OPTIONS="--max-old-space-size=1536" npm run build
 
-# ۵. پیکربندی فایروال و سرویس daemon دائمی systemd
-echo "⚙️ ۵/۵ راه‌اندازی سرویس خودکار پس‌زمینه (systemd)..."
-$SUDO ufw allow 3000/tcp || true
+# ۵. پیکربندی سرویس daemon دائمی systemd (برنامه به‌صورت داخلی روی پورت ۳۰۰۰ اجرا می‌شود)
+echo "⚙️ ۵/۶ راه‌اندازی سرویس خودکار پس‌زمینه (systemd)..."
 
 NODE_PATH=$(which node)
 RUN_USER=$(logname 2>/dev/null || echo $SUDO_USER)
@@ -150,15 +149,77 @@ $SUDO systemctl daemon-reload
 $SUDO systemctl enable hamkarhub.service
 $SUDO systemctl restart hamkarhub.service
 
+# ۶. پیکربندی Nginx روی پورت‌های ۸۰ و ۴۴۳ و فایروال
+echo "⚙️ ۶/۶ پیکربندی Nginx روی پورت‌های ۸۰ و ۴۴۳..."
+
+$SUDO bash -c "cat <<'EOF' > /etc/nginx/sites-available/hamkarhub
+# HamkarHub reverse proxy (80/443) -> Node app on 127.0.0.1:3000
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    client_max_body_size 12m;
+
+    # Server-Sent Events (چت زنده)
+    location /api/chat/stream {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection '';
+        proxy_buffering off;
+        proxy_cache off;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 24h;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_read_timeout 3600s;
+    }
+}
+EOF"
+
+# حذف سایت پیش‌فرض Nginx و فعال‌سازی سایت همکار هاب
+$SUDO rm -f /etc/nginx/sites-enabled/default || true
+$SUDO ln -sf /etc/nginx/sites-available/hamkarhub /etc/nginx/sites-enabled/hamkarhub
+if $SUDO nginx -t; then
+    $SUDO systemctl enable nginx >/dev/null 2>&1 || true
+    $SUDO systemctl restart nginx || true
+else
+    echo "⚠️ پیکربندی Nginx نامعتبر بود؛ لطفاً دستی بررسی کنید."
+fi
+
+# فایروال: پورت‌های وب (۸۰/۴۴۳) و پورت داخلی برنامه
+$SUDO ufw allow 80/tcp || true
+$SUDO ufw allow 443/tcp || true
+$SUDO ufw allow 3000/tcp || true
+
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 echo ""
 echo "=========================================================="
 echo "🎉 سامانه همکار هاب با یک کامند با موفقیت نصب و فعال شد!"
 echo "=========================================================="
-echo "🌐 آدرس دسترسی در شبکه وای‌فای: http://${SERVER_IP}:3000"
-echo "🔐 پنل ادمین و مدیریت میکروتیک: http://${SERVER_IP}:3000 (رمز پیش‌فرض: admin123)"
-echo "📊 وضعیت سرویس: sudo systemctl status hamkarhub"
+echo "🌐 آدرس دسترسی در شبکه وای‌فای: http://${SERVER_IP}"
+echo "🔐 پنل ادمین و مدیریت میکروتیک: http://${SERVER_IP} (رمز پیش‌فرض: admin123)"
+echo "🔒 برای فعال‌سازی SSL (HTTPS روی پورت ۴۴۳): sudo bash setup-ssl.sh"
+echo "📊 وضعیت سرویس‌ها: sudo systemctl status hamkarhub nginx"
 echo "🔄 ری‌استارت سرویس: sudo systemctl restart hamkarhub"
 echo "=========================================================="
 echo ""
