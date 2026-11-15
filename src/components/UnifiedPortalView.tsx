@@ -24,6 +24,9 @@ import {
   Lock,
   RefreshCw,
   Zap,
+  Pencil,
+  Trash2,
+  X,
 } from 'lucide-react';
 import {
   Channel,
@@ -40,10 +43,50 @@ interface ChatMessageRowProps {
   isCurrentUser: boolean;
   currentMemberId: string;
   onToggleReaction: (messageId: string, emoji: string) => void;
+  onEditMessage: (messageId: string, content: string) => Promise<void>;
+  onDeleteMessage: (messageId: string) => Promise<void>;
 }
 
 const ChatMessageRow = React.memo<ChatMessageRowProps>(
-  ({ msg, isCurrentUser, currentMemberId, onToggleReaction }) => {
+  ({ msg, isCurrentUser, currentMemberId, onToggleReaction, onEditMessage, onDeleteMessage }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [draft, setDraft] = useState(msg.content);
+    const [isSaving, setIsSaving] = useState(false);
+    const [rowError, setRowError] = useState<string | null>(null);
+
+    // فقط صاحب پیام می‌تواند آن را ویرایش/حذف کند (اطلاعیه‌ها استثنا هستند)
+    const canManage = isCurrentUser && msg.type !== 'announcement';
+
+    const startEdit = () => {
+      setDraft(msg.content);
+      setRowError(null);
+      setIsEditing(true);
+    };
+
+    const handleSave = async () => {
+      if (!draft.trim() || isSaving) return;
+      setIsSaving(true);
+      setRowError(null);
+      try {
+        await onEditMessage(msg.id, draft);
+        setIsEditing(false);
+      } catch (err) {
+        setRowError(err instanceof Error ? err.message : 'ویرایش پیام ناموفق بود');
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    const handleDelete = async () => {
+      if (!window.confirm('آیا از حذف این پیام مطمئن هستید؟')) return;
+      setRowError(null);
+      try {
+        await onDeleteMessage(msg.id);
+      } catch (err) {
+        setRowError(err instanceof Error ? err.message : 'حذف پیام ناموفق بود');
+      }
+    };
+
     return (
       <div
         className={`p-3.5 rounded-xl border transition-colors ${
@@ -70,18 +113,83 @@ const ChatMessageRow = React.memo<ChatMessageRowProps>(
             </span>
           </div>
 
-          <span className="text-[10px] text-slate-500 font-mono tabular-nums">
-            {new Date(msg.timestamp).toLocaleTimeString('fa-IR', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-500 font-mono tabular-nums">
+              {new Date(msg.timestamp).toLocaleTimeString('fa-IR', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+            </span>
+            {msg.editedAt && (
+              <span className="text-[10px] text-slate-500">(ویرایش شد)</span>
+            )}
+            {canManage && !isEditing && (
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  title="ویرایش پیام"
+                  className="p-1 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 cursor-pointer transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  title="حذف پیام"
+                  className="p-1 rounded-md text-slate-400 hover:text-rose-400 hover:bg-slate-800 cursor-pointer transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Content */}
-        <div className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap pl-1 pr-6">
-          {msg.content}
-        </div>
+        {isEditing ? (
+          <div className="space-y-2">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs sm:text-sm text-white focus:outline-none focus:border-amber-400 resize-none leading-relaxed"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={!draft.trim() || isSaving}
+                className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-bold cursor-pointer disabled:opacity-40 flex items-center gap-1"
+              >
+                <Check className="w-3.5 h-3.5" />
+                ذخیره
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditing(false);
+                  setRowError(null);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium cursor-pointer flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" />
+                انصراف
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap pl-1 pr-6">
+            {msg.content}
+          </div>
+        )}
+
+        {rowError && (
+          <div className="mt-1.5 text-[11px] text-rose-400 flex items-center gap-1">
+            <AlertCircle className="w-3 h-3" />
+            {rowError}
+          </div>
+        )}
 
         {/* Reactions */}
         <div className="mt-2.5 pt-1.5 border-t border-slate-800/50 flex items-center gap-1 text-xs">
@@ -208,6 +316,8 @@ interface UnifiedPortalViewProps {
   currentMember: Member;
   onSendMessage: (channelId: string, content: string) => Promise<void>;
   onToggleReaction: (messageId: string, emoji: string) => void;
+  onEditMessage: (messageId: string, content: string) => Promise<void>;
+  onDeleteMessage: (messageId: string) => Promise<void>;
   onOpenCheckIn: () => void;
   config: HotspotConfig;
   session: HotspotSession;
@@ -227,6 +337,8 @@ export const UnifiedPortalView: React.FC<UnifiedPortalViewProps> = ({
   currentMember,
   onSendMessage,
   onToggleReaction,
+  onEditMessage,
+  onDeleteMessage,
   onOpenCheckIn,
   config,
   session,
@@ -1145,6 +1257,8 @@ export const UnifiedPortalView: React.FC<UnifiedPortalViewProps> = ({
                     isCurrentUser={msg.sender.id === currentMember.id}
                     currentMemberId={currentMember.id}
                     onToggleReaction={onToggleReaction}
+                    onEditMessage={onEditMessage}
+                    onDeleteMessage={onDeleteMessage}
                   />
                 ))}
               </>

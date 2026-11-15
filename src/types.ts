@@ -23,9 +23,12 @@ export interface ChatMessage {
     role: string;
     desk: string;
     avatar?: string;
+    /** آی‌پی دستگاه فرستنده (توسط سرور تنظیم می‌شود) */
+    ip?: string;
   };
   content: string;
   timestamp: number;
+  editedAt?: number;
   reactions?: Record<string, string[]>;
   isPinned?: boolean;
   type?: 'text' | 'announcement' | 'system' | 'poll';

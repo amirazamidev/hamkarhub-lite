@@ -236,6 +236,24 @@ export default function App() {
         }
       });
 
+      eventSource.addEventListener('message_updated', (e) => {
+        try {
+          const updated = JSON.parse(e.data);
+          setMessages((prev) => prev.map((m) => (m.id === updated.id ? { ...m, ...updated } : m)));
+        } catch (err) {
+          console.error('SSE message update parse error:', err);
+        }
+      });
+
+      eventSource.addEventListener('message_deleted', (e) => {
+        try {
+          const { id } = JSON.parse(e.data);
+          setMessages((prev) => prev.filter((m) => m.id !== id));
+        } catch (err) {
+          console.error('SSE message delete parse error:', err);
+        }
+      });
+
       eventSource.addEventListener('reaction_updated', (e) => {
         try {
           const { messageId, reactions } = JSON.parse(e.data);
@@ -441,6 +459,34 @@ export default function App() {
     } catch (err) {
       console.error('Error sending message:', err);
     }
+  };
+
+  // Edit own message
+  const handleEditMessage = async (messageId: string, content: string) => {
+    const res = await fetch(`/api/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, memberId: currentMember.id }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'ویرایش پیام ناموفق بود');
+    }
+    const updated = await res.json();
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, ...updated } : m)));
+  };
+
+  // Delete own message
+  const handleDeleteMessage = async (messageId: string) => {
+    const res = await fetch(
+      `/api/messages/${encodeURIComponent(messageId)}?memberId=${encodeURIComponent(currentMember.id)}`,
+      { method: 'DELETE' }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'حذف پیام ناموفق بود');
+    }
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
   };
 
   // Toggle Reaction
@@ -730,6 +776,8 @@ export default function App() {
             currentMember={currentMember}
             onSendMessage={handleSendMessage}
             onToggleReaction={handleToggleReaction}
+            onEditMessage={handleEditMessage}
+            onDeleteMessage={handleDeleteMessage}
             onOpenCheckIn={() => setIsCheckInOpen(true)}
             config={config}
             session={session}

@@ -14,6 +14,8 @@ import {
   Check,
   Key,
   Sparkles,
+  Upload,
+  Image as ImageIcon,
 } from 'lucide-react';
 import {
   CafeCategory,
@@ -44,6 +46,116 @@ const CAFE_IMAGE_PRESETS = [
   { label: 'چای و دمنوش', url: '/assets/images/cafe_herbal_tea_1794509113421.jpg' },
   { label: 'کیک و ساندویچ', url: '/assets/images/cafe_pastry_sandwich_1794509113971.jpg' },
 ];
+
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+
+/** انتخابگر تصویر با آپلود مستقیم روی سرور (بدون نیاز به لینک بیرونی) */
+const ImageUploadField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (url: string) => void;
+  presets?: { label: string; url: string }[];
+}> = ({ label, value, onChange, presets }) => {
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handlePick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('فقط فایل تصویری مجاز است');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setError('حجم تصویر باید کمتر از ۶ مگابایت باشد');
+      return;
+    }
+
+    setError(null);
+    setIsUploading(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('خطا در خواندن فایل تصویر'));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, dataUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || 'آپلود تصویر ناموفق بود');
+      }
+      onChange(data.url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'آپلود تصویر ناموفق بود');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5 text-right">
+      <label className="text-xs font-medium text-slate-300">{label}</label>
+      <div className="flex items-start gap-3">
+        <div className="w-20 h-20 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0">
+          {value ? (
+            <img src={value} alt="پیش‌نمایش تصویر" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-slate-600">
+              <ImageIcon className="w-6 h-6" />
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 space-y-2">
+          <label
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium border cursor-pointer transition-colors bg-amber-500/10 border-amber-500/40 text-amber-300 hover:bg-amber-500/20 ${
+              isUploading ? 'opacity-60 cursor-wait' : ''
+            }`}
+          >
+            <Upload className="w-3.5 h-3.5" />
+            {isUploading ? 'در حال آپلود...' : 'آپلود تصویر از دستگاه'}
+            <input
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handlePick}
+              disabled={isUploading}
+            />
+          </label>
+
+          {presets && presets.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {presets.map((preset) => (
+                <button
+                  key={preset.url}
+                  type="button"
+                  onClick={() => onChange(preset.url)}
+                  className={`px-2 py-1 text-[11px] rounded-lg border cursor-pointer ${
+                    value === preset.url
+                      ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 font-semibold'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {error && <div className="text-[11px] text-rose-400">{error}</div>}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const BaristaPanel: React.FC<BaristaPanelProps> = ({
   cafeMenu,
@@ -757,13 +869,12 @@ export const BaristaPanel: React.FC<BaristaPanelProps> = ({
                 />
               </div>
 
-              <div className="space-y-1.5 text-right md:col-span-2">
-                <label className="text-xs font-medium text-slate-300">آدرس تصویر بنر کافه:</label>
-                <input
-                  type="text"
+              <div className="md:col-span-2">
+                <ImageUploadField
+                  label="تصویر بنر کافه"
                   value={cafeImg}
-                  onChange={(e) => setCafeImg(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-amber-400"
+                  onChange={setCafeImg}
+                  presets={CAFE_IMAGE_PRESETS}
                 />
               </div>
 
@@ -961,31 +1072,12 @@ export const BaristaPanel: React.FC<BaristaPanelProps> = ({
               />
             </div>
 
-            <div className="space-y-1.5 text-right">
-              <label className="text-xs font-medium text-slate-300">آدرس تصویر محصول:</label>
-              <input
-                type="text"
-                value={cafeItemImageUrl}
-                onChange={(e) => setCafeItemImageUrl(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-amber-400"
-              />
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {CAFE_IMAGE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.url}
-                    type="button"
-                    onClick={() => setCafeItemImageUrl(preset.url)}
-                    className={`px-2 py-1 text-[11px] rounded-lg border cursor-pointer ${
-                      cafeItemImageUrl === preset.url
-                        ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 font-semibold'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ImageUploadField
+              label="تصویر محصول"
+              value={cafeItemImageUrl}
+              onChange={setCafeItemImageUrl}
+              presets={CAFE_IMAGE_PRESETS}
+            />
 
             <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
               <span className="text-xs font-medium text-white">وضعیت موجودی برای سفارش:</span>

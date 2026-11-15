@@ -67,9 +67,60 @@ app.use(
 // Data storage path
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'coworking_db.json');
+// Uploaded images (stored on this server, so no external link is required)
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+// Serve uploaded images directly from the local server
+app.use(
+  '/uploads',
+  express.static(UPLOAD_DIR, {
+    maxAge: isProd ? '30d' : 0,
+    etag: true,
+    index: false,
+  })
+);
+
+// --- Client identity helpers (hotspot account based) ---
+const clientIpOf = (req: Request): string =>
+  String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '')
+    .split(',')[0]
+    .replace('::ffff:', '')
+    .trim();
+
+/** نام کاربری اکانت هات‌اسپات متناظر با آی‌پی دستگاه (یا null اگر پیدا نشد) */
+function resolveHotspotUsername(ip: string): string | null {
+  if (!ip) return null;
+  const db = readDb();
+  const active = db.hotspotActive.find((a) => a.address === ip);
+  const account = active
+    ? db.hotspotUsers.find(
+        (u) => u.name.toLowerCase() === active.user.toLowerCase() || u.id === active.user
+      )
+    : db.hotspotUsers.find((u) => u.id === ip);
+  const username = (active?.user || account?.name || '').trim();
+  return username || null;
+}
+
+/** بررسی مالکیت پیام بر اساس آی‌پی دستگاه و اکانت هات‌اسپات */
+function isMessageOwner(
+  msg: ChatMessage,
+  clientIp: string,
+  hotspotUsername: string | null,
+  memberId?: string
+): boolean {
+  if (msg.sender.ip && clientIp && msg.sender.ip === clientIp) return true;
+  if (hotspotUsername && msg.sender.id === hotspotUsername) return true;
+  // پیام‌های قدیمی که آی‌پی در آن‌ها ذخیره نشده است
+  if (!msg.sender.ip && memberId && msg.sender.id === memberId) return true;
+  return false;
 }
 
 export interface Member {
@@ -96,9 +147,12 @@ export interface ChatMessage {
     role: string;
     desk: string;
     avatar?: string;
+    /** آی‌پی دستگاه فرستنده (توسط سرور تعیین می‌شود) برای کنترل مالکیت پیام */
+    ip?: string;
   };
   content: string;
   timestamp: number;
+  editedAt?: number;
   reactions?: Record<string, string[]>; // emoji -> [memberIds]
   isPinned?: boolean;
   type?: 'text' | 'announcement' | 'system' | 'poll';
@@ -765,16 +819,21 @@ app.post('/api/messages', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'اطلاعات پیام ناقص است' });
   }
 
+  const clientIp = clientIpOf(req);
+  // هویت فرستنده از اکانت هات‌اسپات گرفته می‌شود تا کسی نتواند به‌جای دیگری پیام بفرستد
+  const hotspotUsername = resolveHotspotUsername(clientIp);
+
   const db = readDb();
   const newMessage: ChatMessage = {
     id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     channelId,
     sender: {
-      id: sender.id || `guest-${Date.now()}`,
-      name: sender.name,
+      id: hotspotUsername || sender.id || `guest-${Date.now()}`,
+      name: hotspotUsername || sender.name,
       role: sender.role || 'عضو فضا',
       desk: sender.desk || 'میز اشتراکی',
       avatar: sender.avatar,
+      ip: clientIp,
     },
     content: content.trim(),
     timestamp: Date.now(),
@@ -841,6 +900,101 @@ app.post('/api/messages/reaction', (req: Request, res: Response) => {
   saveDb(db);
   broadcast('reaction_updated', { messageId, reactions: msg.reactions });
   res.json({ success: true, reactions: msg.reactions });
+});
+
+// ویرایش پیام توسط خود کاربر (مالکیت با اکانت هات‌اسپات یا آی‌پی دستگاه بررسی می‌شود)
+app.put('/api/messages/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { content, memberId } = req.body || {};
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ error: 'متن پیام نمی‌تواند خالی باشد' });
+  }
+
+  const db = readDb();
+  const msg = db.messages.find((m) => m.id === id);
+  if (!msg) {
+    return res.status(404).json({ error: 'پیام یافت نشد' });
+  }
+
+  const clientIp = clientIpOf(req);
+  const hotspotUsername = resolveHotspotUsername(clientIp);
+  if (!isMessageOwner(msg, clientIp, hotspotUsername, memberId)) {
+    return res.status(403).json({ error: 'فقط می‌توانید پیام‌های خودتان را ویرایش کنید' });
+  }
+
+  msg.content = String(content).trim();
+  msg.editedAt = Date.now();
+  saveDb(db);
+  broadcast('message_updated', msg);
+  res.json(msg);
+});
+
+// حذف پیام توسط خود کاربر
+app.delete('/api/messages/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const memberId = (req.query.memberId as string) || (req.body && req.body.memberId);
+
+  const db = readDb();
+  const index = db.messages.findIndex((m) => m.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'پیام یافت نشد' });
+  }
+
+  const clientIp = clientIpOf(req);
+  const hotspotUsername = resolveHotspotUsername(clientIp);
+  if (!isMessageOwner(db.messages[index], clientIp, hotspotUsername, memberId)) {
+    return res.status(403).json({ error: 'فقط می‌توانید پیام‌های خودتان را حذف کنید' });
+  }
+
+  db.messages.splice(index, 1);
+  saveDb(db);
+  broadcast('message_deleted', { id });
+  res.json({ success: true, id });
+});
+
+// آپلود تصویر روی همین سرور (بدون نیاز به لینک بیرونی)
+app.post('/api/upload', (req: Request, res: Response) => {
+  const { filename, dataUrl } = req.body || {};
+  if (typeof dataUrl !== 'string') {
+    return res.status(400).json({ error: 'فایل تصویری ارسال نشده است' });
+  }
+
+  const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(dataUrl);
+  if (!match) {
+    return res.status(400).json({ error: 'فرمت تصویر پشتیبانی نمی‌شود' });
+  }
+
+  const allowed: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+  };
+  const ext = allowed[match[1].toLowerCase()];
+  if (!ext) {
+    return res.status(400).json({ error: 'فرمت تصویر پشتیبانی نمی‌شود' });
+  }
+
+  const buffer = Buffer.from(match[2], 'base64');
+  const MAX_SIZE = 6 * 1024 * 1024; // 6MB
+  if (!buffer.length || buffer.length > MAX_SIZE) {
+    return res.status(400).json({ error: 'حجم تصویر باید کمتر از ۶ مگابایت باشد' });
+  }
+
+  const baseName =
+    String(filename || 'image')
+      .toLowerCase()
+      .replace(/\.[a-z0-9]+$/, '')
+      .replace(/[^a-z0-9\-_]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'image';
+
+  const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}-${baseName}.${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, fileName), buffer);
+
+  res.status(201).json({ success: true, url: `/uploads/${fileName}` });
 });
 
 // Members / Who's in the space
