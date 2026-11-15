@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Lock,
   Plus,
@@ -41,6 +41,9 @@ import {
   Activity,
   Ticket,
   Power,
+  Search,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { MikrotikIntegrationGuide } from './MikrotikIntegrationGuide';
 import {
@@ -116,6 +119,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isGeneratingVouchers, setIsGeneratingVouchers] = useState(false);
   const [copiedVoucher, setCopiedVoucher] = useState<string | null>(null);
   const [togglingUserId, setTogglingUserId] = useState<string | null>(null);
+
+  // Search & sort controls for the hotspot user accounts table
+  const [userSearch, setUserSearch] = useState('');
+  const [userSortKey, setUserSortKey] = useState<
+    'name' | 'profile' | 'used' | 'limit' | 'comment' | 'status'
+  >('name');
+  const [userSortDir, setUserSortDir] = useState<'asc' | 'desc'>('asc');
 
   // Full Edit Hotspot User Form
   const [editingUser, setEditingUser] = useState<HotspotUserAccount | null>(null);
@@ -452,6 +462,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return `${mb.toFixed(1)} MB`;
   };
 
+  // Filtered + sorted hotspot user accounts (search by username/profile/comment)
+  const visibleHotspotUsers = useMemo(() => {
+    const q = userSearch.trim().toLowerCase();
+    const filtered = q
+      ? hotspotUsers.filter((u) =>
+          [u.name, u.profile, u.comment || '', u.id].some((f) => String(f).toLowerCase().includes(q))
+        )
+      : hotspotUsers.slice();
+
+    const dir = userSortDir === 'asc' ? 1 : -1;
+    filtered.sort((a, b) => {
+      switch (userSortKey) {
+        case 'profile':
+          return a.profile.localeCompare(b.profile, 'fa') * dir;
+        case 'comment':
+          return String(a.comment || '').localeCompare(String(b.comment || ''), 'fa') * dir;
+        case 'used':
+          return ((a.bytesIn + a.bytesOut) - (b.bytesIn + b.bytesOut)) * dir;
+        case 'limit':
+          return (a.limitBytesTotal - b.limitBytesTotal) * dir;
+        case 'status':
+          return (Number(a.disabled || false) - Number(b.disabled || false)) * dir;
+        case 'name':
+        default:
+          return a.name.localeCompare(b.name, 'fa') * dir;
+      }
+    });
+    return filtered;
+  }, [hotspotUsers, userSearch, userSortKey, userSortDir]);
+
+  const toggleUserSort = (key: 'name' | 'profile' | 'used' | 'limit' | 'comment' | 'status') => {
+    if (userSortKey === key) {
+      setUserSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setUserSortKey(key);
+      setUserSortDir('asc');
+    }
+  };
+
   // Login view if not authenticated
   if (!isAuthenticated) {
     return (
@@ -728,15 +777,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
           {/* SECTION B: HOTSPOT USER ACCOUNTS & QUOTA LIMITS (/ip hotspot user) */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <Database className="w-4 h-4 text-amber-400" />
-                  <span>فهرست اکانت‌های هات‌اسپات و مدیریت سهمیه حجم اینترنت ({hotspotUsers.length})</span>
+                  <span>
+                    فهرست اکانت‌های هات‌اسپات و مدیریت سهمیه حجم اینترنت (
+                    {userSearch.trim() ? `${visibleHotspotUsers.length} از ${hotspotUsers.length}` : hotspotUsers.length})
+                  </span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
                   می‌توانید حجم مصرفی هر کاربر را کم یا زیاد کنید یا اکانت را حذف نمایید
                 </p>
+              </div>
+
+              {/* Search box */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-500 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  placeholder="جستجوی نام کاربری، پروفایل یا توضیحات..."
+                  className="w-64 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl pr-8 pl-8 py-1.5 text-xs text-white placeholder:text-slate-600 outline-none"
+                />
+                {userSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setUserSearch('')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs cursor-pointer"
+                    title="پاک کردن جستجو"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             </div>
 
@@ -744,16 +818,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <table className="w-full text-right text-xs">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400">
-                    <th className="py-2.5 px-3">نام کاربری</th>
-                    <th className="py-2.5 px-3">پروفایل</th>
-                    <th className="py-2.5 px-3">حجم مصرفی فعلی</th>
-                    <th className="py-2.5 px-3">سقف حجم مجاز (Quota)</th>
-                    <th className="py-2.5 px-3">توضیحات</th>
+                    {(
+                      [
+                        { key: 'name', label: 'نام کاربری' },
+                        { key: 'profile', label: 'پروفایل' },
+                        { key: 'used', label: 'حجم مصرفی فعلی' },
+                        { key: 'limit', label: 'سقف حجم مجاز (Quota)' },
+                        { key: 'comment', label: 'توضیحات' },
+                        { key: 'status', label: 'وضعیت' },
+                      ] as const
+                    ).map((col) => (
+                      <th key={col.key} className="py-2.5 px-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleUserSort(col.key)}
+                          className={`flex items-center gap-1 transition-colors cursor-pointer hover:text-amber-300 ${
+                            userSortKey === col.key ? 'text-amber-300 font-bold' : ''
+                          }`}
+                          title="مرتب‌سازی بر اساس این ستون"
+                        >
+                          <span>{col.label}</span>
+                          {userSortKey === col.key ? (
+                            userSortDir === 'asc' ? (
+                              <ChevronUp className="w-3 h-3" />
+                            ) : (
+                              <ChevronDown className="w-3 h-3" />
+                            )
+                          ) : (
+                            <ChevronDown className="w-3 h-3 opacity-30" />
+                          )}
+                        </button>
+                      </th>
+                    ))}
                     <th className="py-2.5 px-3 text-left">تغییر سهمیه و حذف</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {hotspotUsers.map((u) => {
+                  {visibleHotspotUsers.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-6 text-center text-slate-500 text-xs">
+                        {hotspotUsers.length === 0
+                          ? 'هنوز اکانتی تعریف نشده است.'
+                          : 'هیچ اکانتی با این جستجو پیدا نشد.'}
+                      </td>
+                    </tr>
+                  )}
+                  {visibleHotspotUsers.map((u) => {
                     const totalLimitStr =
                       u.limitBytesTotal > 0 ? formatBytes(u.limitBytesTotal) : 'نامحدود (Unlimited)';
                     const usedBytes = u.bytesIn + u.bytesOut;
@@ -768,11 +878,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             {u.isVoucher && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-sans">
                                 ووچر
-                              </span>
-                            )}
-                            {u.disabled && (
-                              <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] font-sans">
-                                مسدود
                               </span>
                             )}
                           </div>
@@ -804,6 +909,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </td>
                         <td className="py-3 px-3 font-semibold text-amber-300 font-mono">{totalLimitStr}</td>
                         <td className="py-3 px-3 text-slate-400 text-[11px]">{u.comment || '-'}</td>
+                        <td className="py-3 px-3">
+                          {u.disabled ? (
+                            <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40 text-[10px] whitespace-nowrap">
+                              مسدود
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] whitespace-nowrap">
+                              فعال
+                            </span>
+                          )}
+                        </td>
                         <td className="py-3 px-3 text-left">
                           <div className="flex items-center justify-end gap-1.5">
                             {/* Full Edit User Button */}
