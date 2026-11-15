@@ -1,0 +1,36 @@
+{
+  "name": "hamkarhub",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "همکار هاب | چت فضای کار اشتراکی و کپتیو پورتال میکروتیک — نسخه سبک و سازگار با پردازنده‌های قدیمی",
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:watch": "node scripts/build.mjs --watch",
+    "start": "node server.js",
+    "dev": "node scripts/build.mjs && node server.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "jszip": "^3.10.2",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.21.5",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.5.4"
+  }
+}
