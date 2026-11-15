@@ -59,6 +59,7 @@ echo "✅ نسخه NPM: $(npm -v)"
 
 # ۳. تعیین دایرکتوری نصب یا کلون از گیت‌هاب
 TARGET_DIR="/opt/hamkarhub"
+BRANCH="main"
 
 # اگر کاربر از داخل یک پوشه ریپو این اسکریپت را صدا زده باشد:
 if [ -f "./server.ts" ] && [ -f "./package.json" ]; then
@@ -68,22 +69,31 @@ else
     # دریافت آدرس ریپو در صورت پاس دادن به عنوان متغیر یا آرگومان اول
     REPO_URL="${1:-${GITHUB_REPO:-}}"
     if [ -z "$REPO_URL" ]; then
-        # اگر کاربر ریپو را پاس نداده باشد، اگر در گیت‌هاب باشیم می‌توانیم از مبدا استفاده کنیم
-        REPO_URL="https://github.com/amirazamidev/hamkarhub.git"
+        REPO_URL="https://github.com/amirazamidev/hamkarhub-lite.git"
     fi
 
     echo "📁 ۳/۵ آماده‌سازی دایرکتوری در $TARGET_DIR..."
     if [ -d "$TARGET_DIR/.git" ]; then
-        echo "🔄 ریپو از قبل وجود دارد، در حال به‌روزرسانی (git pull)..."
+        echo "🔄 نسخه قبلی پیدا شد؛ در حال به‌روزرسانی به آخرین نسخه ($REPO_URL)..."
         cd "$TARGET_DIR"
-        $SUDO git pull || true
+        # جلوگیری از خطای «dubious ownership» هنگام اجرای git با root
+        $SUDO git config --global --add safe.directory "$TARGET_DIR" 2>/dev/null || true
+        # اتصال به مخزن جدید (حتی اگر قبلاً به مخزن دیگری وصل بود)
+        $SUDO git remote set-url origin "$REPO_URL" 2>/dev/null || $SUDO git remote add origin "$REPO_URL"
+        # به‌روزرسانی اجباری و نادیده‌گرفتن تغییرات محلی (فایل‌های بیلد مانند dist/server.js نادیده گرفته می‌شوند)
+        if $SUDO git fetch origin --prune --tags && $SUDO git reset --hard "origin/$BRANCH"; then
+            echo "✅ کد به آخرین نسخه به‌روزرسانی شد."
+        else
+            echo "⚠️ به‌روزرسانی خودکار ناموفق بود. برای نصب تمیز، مسیر $TARGET_DIR را حذف و مجدداً اسکریپت را اجرا کنید."
+            exit 1
+        fi
     else
         $SUDO rm -rf "$TARGET_DIR" 2>/dev/null || true
         echo "📥 در حال کلون کردن پروژه از گیت‌هاب ($REPO_URL)..."
         $SUDO git clone "$REPO_URL" "$TARGET_DIR" || {
             echo "⚠️ کلون از آدرس مستقیم ناموفق بود."
             echo "در صورت خصوصی بودن مخزن (Private)، ابتدا با دستور زیر کلون کنید:"
-            echo "   git clone https://github.com/amirazamidev/hamkarhub.git $TARGET_DIR"
+            echo "   git clone https://github.com/amirazamidev/hamkarhub-lite.git $TARGET_DIR"
             exit 1
         }
         cd "$TARGET_DIR"

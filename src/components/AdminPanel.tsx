@@ -151,7 +151,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [copiedWebInstaller, setCopiedWebInstaller] = useState(false);
   const [copiedGitInstaller, setCopiedGitInstaller] = useState(false);
   const [copiedGitClone, setCopiedGitClone] = useState(false);
-  const [gitRepoUrl, setGitRepoUrl] = useState('https://github.com/amirazamidev/hamkarhub');
+  const [gitRepoUrl, setGitRepoUrl] = useState('https://github.com/amirazamidev/hamkarhub-lite');
 
   // Load MikroTik API data
   const loadMikrotikData = async () => {

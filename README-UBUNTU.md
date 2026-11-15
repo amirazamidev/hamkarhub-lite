@@ -11,11 +11,11 @@ curl -sSL https://ais-pre-tiup3s7akyiwcghfvar7uk-751417033854.europe-west2.run.a
 ### روش ب: نصب مستقیم از طریق گیت‌هاب (GitHub One-Liner):
 اگر پروژه را در مخزن گیت‌هاب خود قرار داده‌اید:
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/amirazamidev/hamkarhub/main/install-quick.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/amirazamidev/hamkarhub-lite/main/install-quick.sh)"
 ```
 یا با کلون مستقیم ریپو:
 ```bash
-git clone https://github.com/amirazamidev/hamkarhub.git && cd hamkarhub && sudo ./install-ubuntu.sh
+git clone https://github.com/amirazamidev/hamkarhub-lite.git && cd hamkarhub-lite && sudo ./install-ubuntu.sh
 ```
 
 این اسکریپت‌ها به صورت کاملاً خودکار:
